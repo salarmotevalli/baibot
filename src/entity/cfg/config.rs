@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::controller::chat_completion::message_aggregator::ConfigChatCompletionAggregator;
+
 use mxlink::helpers::encryption::EncryptionKey;
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +35,12 @@ pub struct Config {
 
     #[serde(default = "super::defaults::logging")]
     pub logging: String,
+
+    pub chat_completion_aggregator: ConfigChatCompletionAggregator,
+
+    pub sqlite_db_path: String,
+    
+    pub uniqe_bot_id: String
 }
 
 impl Config {

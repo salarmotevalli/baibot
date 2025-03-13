@@ -8,7 +8,7 @@ use super::{
     roomconfig::RoomConfig,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MessageContext {
     room: Room,
     room_config_context: RoomConfigContext,
@@ -77,6 +77,10 @@ impl MessageContext {
 
     pub fn payload(&self) -> &MessagePayload {
         &self.trigger_event_info.payload
+    }
+
+    pub fn set_payload(&mut self, payload: MessagePayload) {
+        self.trigger_event_info.payload = payload;
     }
 
     pub fn thread_info(&self) -> &ThreadInfo {

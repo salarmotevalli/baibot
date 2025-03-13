@@ -1,3 +1,7 @@
+pub mod message_aggregator;
+pub use message_aggregator::handle;
+
+use mxlink::matrix_sdk::ruma::events::room::message::AudioMessageEventContent;
 use mxlink::matrix_sdk::ruma::OwnedEventId;
 use mxlink::matrix_sdk::ruma::events::room::message::AudioMessageEventContent;
 use mxlink::{MatrixLink, MessageResponseType};
@@ -13,6 +17,7 @@ use crate::agent::provider::{
 use crate::controller::utils::agent::get_effective_agent_for_purpose_or_complain;
 use crate::conversation::matrix::MatrixMessageProcessingParams;
 use crate::entity::MessagePayload;
+use crate::repository::Response;
 use crate::entity::roomconfig::{
     SpeechToTextFlowType, SpeechToTextMessageTypeForNonThreadedOnlyTranscribedMessages,
     TextToSpeechBotMessagesFlowType, TextToSpeechUserMessagesFlowType,
@@ -28,7 +33,7 @@ use crate::{
     entity::MessageContext,
 };
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum ChatCompletionControllerType {
     // Invoked via a command prefix (e.g. `!bai Hello!`)
     TextCommand,
@@ -53,7 +58,7 @@ enum TextToSpeechParams {
     Offer(TextToSpeechEligiblePayload, MessageResponseType),
 }
 
-pub async fn handle(
+pub async fn handle_message(
     bot: &Bot,
     matrix_link: MatrixLink,
     message_context: &MessageContext,
@@ -578,7 +583,16 @@ async fn handle_stage_text_generation(
         return None;
     }
 
-    let send_message_response = bot
+    let _ = bot.repository().store_response(
+        Response {
+            id: 0,
+            bot_id: bot.bot_uniqe_id(),
+            length: text.split_whitespace().count() as i64,
+            stored_at: chrono::Utc::now().date_naive().to_string()
+        }
+    ).await;
+    
+        let send_message_response = bot
         .messaging()
         .send_text_markdown_no_fail(message_context.room(), text.clone(), response_type)
         .await?;

@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 use std::{future::Future, pin::Pin};
 
@@ -19,6 +20,7 @@ use mxlink::helpers::account_data_config::{
 use mxlink::helpers::encryption::Manager as EncryptionManager;
 
 use crate::agent::Manager as AgentManager;
+use crate::controller::chat_completion::message_aggregator::MessageAggregator;
 use crate::entity::catch_up_marker::{
     CatchUpMarker, CatchUpMarkerManager, DelayedCatchUpMarkerManager,
 };
@@ -29,6 +31,8 @@ use crate::entity::roomconfig::{RoomConfig, RoomConfigurationManager};
 use crate::agent::Manager;
 
 use crate::conversation::matrix::{RoomDisplayNameFetcher, RoomEventFetcher};
+use crate::repository::sqlite::{SqliteBotRepository, SqliteConn};
+use crate::repository::BotRepository;
 
 const ROOM_EVENT_FETCHER_LRU_CACHE_SIZE: usize = 1000;
 const ROOM_DISPLAY_NAME_FETCHER_LRU_CACHE_SIZE: usize = 1000;
@@ -59,6 +63,8 @@ struct BotInner {
     room_display_name_fetcher: Arc<RoomDisplayNameFetcher>,
     agent_manager: Manager,
     admin_pattern_regexes: Vec<regex::Regex>,
+    chat_completion_message_aggregator: Arc<MessageAggregator>,
+    repository: Arc<dyn BotRepository>
 }
 
 /// Bot represents a bot instance.
@@ -70,6 +76,14 @@ pub struct Bot {
 }
 
 impl Bot {
+    pub fn chat_completion_message_aggregator(&self) -> Arc<MessageAggregator> {
+        Arc::clone(&self.inner.chat_completion_message_aggregator)
+    }
+
+    pub fn repository(&self) -> Arc<dyn BotRepository> {
+        Arc::clone(&self.inner.repository)
+    }
+
     pub async fn new(config: Config) -> anyhow::Result<Self> {
         // Take some potentially problematic configuration values out of the config early on.
         // If we'd be failing, we'd like it to happen early, before we log in, etc.
@@ -112,6 +126,12 @@ impl Bot {
             Some(ROOM_DISPLAY_NAME_FETCHER_LRU_CACHE_SIZE),
         );
 
+        let chat_completion_message_aggregator =
+            MessageAggregator::new(config.chat_completion_aggregator.clone());
+
+        let sqlite_conn = SqliteConn::new(Path::new(&config.sqlite_db_path));
+        let repository = SqliteBotRepository::new(Arc::new(sqlite_conn));
+
         Ok(Self {
             inner: Arc::new(BotInner {
                 config,
@@ -124,10 +144,16 @@ impl Bot {
                 room_display_name_fetcher: Arc::new(room_display_name_fetcher),
                 agent_manager,
                 admin_pattern_regexes,
+                chat_completion_message_aggregator: Arc::new(chat_completion_message_aggregator),
+                repository: Arc::new(repository)
             }),
         })
     }
 
+    pub fn bot_uniqe_id(&self) -> String {
+        self.inner.config.uniqe_bot_id.clone()
+    }
+    
     pub(crate) fn admin_patterns(&self) -> &Vec<String> {
         &self.inner.config.access.admin_patterns
     }
@@ -250,11 +276,23 @@ impl Bot {
 
         self.prepare_profile().await?;
 
-        self.inner
-            .matrix_link
-            .start()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to sync: {:?}", e))
+        let cloned_aggregator = Arc::clone(&self.inner.chat_completion_message_aggregator);
+
+        let chat_completion_message_aggregator_handler =
+            tokio::spawn(async move { cloned_aggregator.listen().await });
+
+        let cloened_inner = Arc::clone(&self.inner);
+
+        let bot_runner = tokio::spawn(async move {
+            cloened_inner
+                .matrix_link
+                .start()
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to sync: {:?}", e))
+        });
+
+        chat_completion_message_aggregator_handler.await.unwrap();
+        bot_runner.await.unwrap()
     }
 
     async fn prepare_profile(&self) -> anyhow::Result<()> {
